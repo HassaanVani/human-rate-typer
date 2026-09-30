@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Human Rate Typer editor fixtures</title>
+    <style>
+      body { max-width: 760px; margin: 40px auto; font: 16px system-ui; }
+      label { display: block; margin: 24px 0; }
+      input, textarea, [contenteditable], .rich-editor { width: 100%; min-height: 42px; padding: 10px; border: 1px solid #888; }
+    </style>
+  </head>
+  <body>
+    <label>Input <input id="input" type="text" /></label>
+    <label>Textarea <textarea id="textarea"></textarea></label>
+    <label>Contenteditable <div id="contenteditable" contenteditable="true"></div></label>
+    <label>Rich editor fixture <div id="rich" class="rich-editor" role="textbox" contenteditable="true"></div></label>
+    <iframe id="editor-frame" title="Iframe editor" srcdoc="<textarea id='frame-textarea'></textarea>"></iframe>
+  </body>
+</html>
