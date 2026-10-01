@@ -150,3 +150,17 @@ export function replayPlan(plan: TypingPlan): string {
   }
   return buffer.join('');
 }
+
+export function rescaleRemainingPlan(
+  plan: TypingPlan,
+  fromStep: number,
+  previousWpm: number,
+  nextWpm: number,
+): number {
+  const ratio = previousWpm / nextWpm;
+  for (let index = Math.max(0, fromStep); index < plan.steps.length; index += 1) {
+    plan.steps[index]!.delayMs *= ratio;
+  }
+  plan.estimatedMs = plan.steps.reduce((sum, step) => sum + step.delayMs, 0);
+  return ratio;
+}

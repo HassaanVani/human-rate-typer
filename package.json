@@ -1,6 +1,6 @@
 {
   "name": "human-rate-typer",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "build:opera": "npm run build && node scripts/build-opera.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "diagnostic": "vitest run src/core/keymap.test.ts src/core/planner.test.ts src/core/cleanup.test.ts && tsc --noEmit && vite build",
     "test:e2e": "npm run build && playwright test",
     "test:e2e:opera": "npm run build:opera && EXTENSION_PATH=dist-opera playwright test"
   },

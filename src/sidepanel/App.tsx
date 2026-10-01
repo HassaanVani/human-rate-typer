@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cleanText } from '../core/cleanup';
-import { createTypingPlan } from '../core/planner';
+import { createTypingPlan, rescaleRemainingPlan } from '../core/planner';
 import { createSeed } from '../core/random';
 import {
   DEFAULT_PROFILE,
@@ -69,6 +69,9 @@ export function App() {
   const activeStartedAtRef = useRef<number | null>(null);
   const elapsedBeforeRunRef = useRef(0);
   const backgroundOwnedRef = useRef(false);
+  const profileRef = useRef(profile);
+  const activeWpmRef = useRef(profile.targetWpm);
+  profileRef.current = profile;
   const cleanup = useMemo(() => cleanText(text), [text]);
   const handlersRef = useRef<{
     begin: (mode?: StartMode) => void;
@@ -142,8 +145,10 @@ export function App() {
   };
 
   const startPlan = useCallback(() => {
-    const plan = createTypingPlan(cleanup.cleaned, profile, createSeed());
+    const currentProfile = profileRef.current;
+    const plan = createTypingPlan(cleanup.cleaned, currentProfile, createSeed());
     planRef.current = plan;
+    activeWpmRef.current = currentProfile.targetWpm;
     stepIndexRef.current = 0;
     completedRef.current = 0;
     elapsedBeforeRunRef.current = 0;
@@ -154,10 +159,10 @@ export function App() {
     setElapsedMs(0);
     setSessionStatus('running');
     scheduleNextRef.current();
-  }, [cleanup.cleaned, profile, setSessionStatus]);
+  }, [cleanup.cleaned, setSessionStatus]);
 
   const beginCountdown = useCallback(() => {
-    let remaining = Math.max(0, Math.round(profile.countdownSeconds));
+    let remaining = Math.max(0, Math.round(profileRef.current.countdownSeconds));
     setCountdown(remaining);
     setSessionStatus('countdown');
     const tick = () => {
@@ -172,7 +177,7 @@ export function App() {
       countdownRef.current = setTimeout(tick, 1000);
     };
     tick();
-  }, [profile.countdownSeconds, setSessionStatus, startPlan]);
+  }, [setSessionStatus, startPlan]);
 
   const stop = useCallback((reason?: string, nextStatus: SessionStatus = 'stopped') => {
     clearTimers();
@@ -211,6 +216,7 @@ export function App() {
     setError('');
     setTargetLabel('');
     if (mode === 'click') {
+      activeWpmRef.current = profile.targetWpm;
       backgroundOwnedRef.current = true;
       setBackgroundOwned(true);
       setSessionStatus('arming');
@@ -255,6 +261,10 @@ export function App() {
           setBackgroundTotal(message.total);
           setBackgroundRemainingMs(message.remainingMs);
           setElapsedMs(message.elapsedMs);
+          activeWpmRef.current = message.targetWpm;
+          setProfile((current) => current.targetWpm === message.targetWpm
+            ? current
+            : { ...current, targetWpm: message.targetWpm });
           if (message.error) setError(message.error);
           else if (message.status === 'running') setError('');
           break;
@@ -284,7 +294,12 @@ export function App() {
       chrome.storage.local.get(['profile']),
     ]).then(([sessionData, localData]) => {
       if (typeof sessionData.draftText === 'string') setText(sessionData.draftText);
-      if (localData.profile) setProfile({ ...DEFAULT_PROFILE, ...localData.profile });
+      if (localData.profile) {
+        const storedProfile = { ...DEFAULT_PROFILE, ...localData.profile };
+        setProfile(storedProfile);
+        profileRef.current = storedProfile;
+        activeWpmRef.current = storedProfile.targetWpm;
+      }
       if (typeof sessionData.pendingCommand === 'string') setPendingCommand(sessionData.pendingCommand);
       void chrome.storage.session.remove('pendingCommand');
       setLoaded(true);
@@ -349,6 +364,31 @@ export function App() {
 
   const updateProfile = <K extends keyof TypingProfile>(key: K, value: TypingProfile[K]) => {
     setProfile((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateTargetWpm = (targetWpm: number) => {
+    const nextWpm = Math.min(200, Math.max(10, targetWpm));
+    const previousWpm = activeWpmRef.current;
+    setProfile((current) => ({ ...current, targetWpm: nextWpm }));
+    profileRef.current = { ...profileRef.current, targetWpm: nextWpm };
+    activeWpmRef.current = nextWpm;
+    if (!['arming', 'countdown', 'running', 'paused'].includes(statusRef.current)) return;
+    if (backgroundOwnedRef.current) {
+      post({ type: 'SET_WPM', targetWpm: nextWpm });
+      return;
+    }
+    const plan = planRef.current;
+    if (!plan || previousWpm === nextWpm) return;
+    const ratio = rescaleRemainingPlan(plan, stepIndexRef.current, previousWpm, nextWpm);
+    const running = statusRef.current === 'running';
+    const currentRemaining = running
+      ? Math.max(0, dueAtRef.current - performance.now())
+      : remainingDelayRef.current;
+    if (running && timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    if (currentRemaining !== null) remainingDelayRef.current = currentRemaining * ratio;
+    setNowTick((value) => value + 1);
+    if (running) window.setTimeout(() => scheduleNextRef.current(), 0);
   };
 
   const toggleTypo = (kind: TypoKind) => {
@@ -424,9 +464,9 @@ export function App() {
         </div>
 
         <label className="slider-row">
-          <span>Average speed</span>
-          <input type="range" min="10" max="200" value={profile.targetWpm} disabled={busy}
-            onChange={(event) => updateProfile('targetWpm', Number(event.target.value))} />
+          <span>Average speed {busy && <b>Live</b>}</span>
+          <input type="range" min="10" max="200" value={profile.targetWpm}
+            onChange={(event) => updateTargetWpm(Number(event.target.value))} />
           <span className="range-labels"><i>10</i><i>200</i></span>
         </label>
 

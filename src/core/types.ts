@@ -71,6 +71,7 @@ export type PanelToBackgroundMessage =
   | { type: 'ARM_TARGET'; source: string; profile: TypingProfile; seed: number }
   | { type: 'PREPARE_SESSION'; mode: Exclude<StartMode, 'shortcut'> }
   | { type: 'DISPATCH_INPUT'; action: InputAction }
+  | { type: 'SET_WPM'; targetWpm: number }
   | { type: 'PAUSE_BACKGROUND' }
   | { type: 'RESUME_BACKGROUND' }
   | { type: 'FINISH_SESSION' }
@@ -90,6 +91,7 @@ export type BackgroundToPanelMessage =
       total: number;
       remainingMs: number;
       elapsedMs: number;
+      targetWpm: number;
       error?: string;
     }
   | { type: 'SESSION_ABORTED'; reason: string }

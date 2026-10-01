@@ -5,7 +5,8 @@ import type {
   TypingPlan,
   TypingProfile,
 } from '../core/types';
-import { createTypingPlan } from '../core/planner';
+import { createTypingPlan, rescaleRemainingPlan } from '../core/planner';
+import { keyboardEventForAscii } from '../core/keymap';
 
 let panelPort: chrome.runtime.Port | null = null;
 let attachedTabId: number | null = null;
@@ -217,16 +218,6 @@ async function detach(): Promise<void> {
   }
 }
 
-function keyMetadata(text: string): { code: string; virtualKeyCode: number; modifiers?: number } {
-  if (/^[a-zA-Z]$/.test(text)) {
-    const upper = text.toUpperCase();
-    return { code: `Key${upper}`, virtualKeyCode: upper.charCodeAt(0), modifiers: text === upper ? 8 : 0 };
-  }
-  if (/^[0-9]$/.test(text)) return { code: `Digit${text}`, virtualKeyCode: text.charCodeAt(0) };
-  if (text === ' ') return { code: 'Space', virtualKeyCode: 32 };
-  return { code: '', virtualKeyCode: text.charCodeAt(0) || 0 };
-}
-
 async function dispatchKey(action: InputAction): Promise<void> {
   if (attachedTabId === null) throw new Error('The typing session is not attached to a tab.');
   const debuggee = targetFor(attachedTabId);
@@ -243,21 +234,21 @@ async function dispatchKey(action: InputAction): Promise<void> {
     return;
   }
 
-  if (/^[\x20-\x7E]$/.test(action.text)) {
-    const metadata = keyMetadata(action.text);
+  const metadata = keyboardEventForAscii(action.text);
+  if (metadata) {
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
       type: 'keyDown',
       key: action.text,
       code: metadata.code,
       text: action.text,
       unmodifiedText: action.text,
-      modifiers: metadata.modifiers ?? 0,
+      modifiers: metadata.modifiers,
       windowsVirtualKeyCode: metadata.virtualKeyCode,
       nativeVirtualKeyCode: metadata.virtualKeyCode,
     });
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
       type: 'keyUp', key: action.text, code: metadata.code,
-      modifiers: metadata.modifiers ?? 0, windowsVirtualKeyCode: metadata.virtualKeyCode,
+      modifiers: metadata.modifiers, windowsVirtualKeyCode: metadata.virtualKeyCode,
     });
   } else {
     await chrome.debugger.sendCommand(debuggee, 'Input.insertText', { text: action.text });
@@ -294,6 +285,7 @@ function emitAutomationState(): void {
     total: session.plan.graphemeCount,
     remainingMs: automationRemaining(session),
     elapsedMs: automationElapsed(session),
+    targetWpm: session.profile.targetWpm,
     error: session.error,
   };
   send(message);
@@ -375,6 +367,32 @@ function resumeAutomation(): void {
   session.runningSince = Date.now();
   emitAutomationState();
   scheduleAutomationStep();
+}
+
+function setAutomationWpm(targetWpm: number): void {
+  const session = automatedSession;
+  if (!session) return;
+  const nextWpm = Math.min(200, Math.max(10, targetWpm));
+  const previousWpm = session.profile.targetWpm;
+  if (nextWpm === previousWpm) return;
+  const ratio = rescaleRemainingPlan(session.plan, session.stepIndex, previousWpm, nextWpm);
+  const wasRunning = session.status === 'running';
+  const currentRemaining = wasRunning
+    ? Math.max(0, session.dueAt - Date.now())
+    : session.remainingDelay;
+  if (wasRunning && session.timer) clearTimeout(session.timer);
+  session.timer = null;
+  session.profile = { ...session.profile, targetWpm: nextWpm };
+  if (currentRemaining !== null) session.remainingDelay = currentRemaining * ratio;
+  void chrome.storage.session.set({
+    pendingClickSession: {
+      source: session.plan.source,
+      profile: session.profile,
+      seed: session.plan.seed,
+    },
+  });
+  emitAutomationState();
+  if (wasRunning) scheduleAutomationStep();
 }
 
 function startAutomationTyping(): void {
@@ -491,6 +509,9 @@ async function handlePanelMessage(message: PanelToBackgroundMessage): Promise<vo
       break;
     case 'DISPATCH_INPUT':
       await dispatchKey(message.action);
+      break;
+    case 'SET_WPM':
+      setAutomationWpm(message.targetWpm);
       break;
     case 'PAUSE_BACKGROUND':
       pauseAutomation();

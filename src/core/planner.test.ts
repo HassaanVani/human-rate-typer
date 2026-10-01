@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createTypingPlan, replayPlan } from './planner';
+import { createTypingPlan, replayPlan, rescaleRemainingPlan } from './planner';
 import { DEFAULT_PROFILE, type TypingProfile, type TypoKind } from './types';
 
 function profile(overrides: Partial<TypingProfile> = {}): TypingProfile {
@@ -73,5 +73,21 @@ describe('createTypingPlan', () => {
     const plan = createTypingPlan('A👩‍💻B', profile({ typoRate: 0 }), 7);
     expect(plan.graphemeCount).toBe(3);
     expect(replayPlan(plan)).toBe('A👩‍💻B');
+  });
+
+  it('preserves citation punctuation exactly through typo planning', () => {
+    const source = 'Evidence supports this claim (Smith, 2024, pp. 12–14).';
+    const plan = createTypingPlan(source, profile({ typoRate: 4 }), 2024);
+    expect(replayPlan(plan)).toBe(source);
+  });
+
+  it('rescales only the remaining delays when WPM changes live', () => {
+    const plan = createTypingPlan('Change speed while this sentence is typing.', profile({ targetWpm: 50, typoRate: 0 }), 8);
+    const before = plan.steps.map((step) => step.delayMs);
+    const ratio = rescaleRemainingPlan(plan, 5, 50, 100);
+    expect(ratio).toBe(0.5);
+    expect(plan.steps.slice(0, 5).map((step) => step.delayMs)).toEqual(before.slice(0, 5));
+    expect(plan.steps.slice(5).map((step) => step.delayMs)).toEqual(before.slice(5).map((delay) => delay * 0.5));
+    expect(replayPlan(plan)).toBe('Change speed while this sentence is typing.');
   });
 });

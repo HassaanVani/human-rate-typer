@@ -28,6 +28,8 @@ Chrome will display a strong debugger permission warning. The extension uses tha
    - **Shortcut:** focus an editor and press `Command/Ctrl+Shift+Y`.
 4. Pause/resume with `Command/Ctrl+Shift+U` or stop immediately with `Command/Ctrl+Shift+X`.
 
+The WPM slider remains active during countdown, typing, and pause. Changing it immediately rescales the unfinished part of the session without restarting or altering the text.
+
 Chrome shortcuts can be changed at `chrome://extensions/shortcuts`.
 
 ## Privacy and safety
@@ -49,6 +51,7 @@ This is not a universal “AI watermark” detector. Semantic watermarking, unus
 
 ```sh
 npm run test
+npm run diagnostic
 npm run build
 npm run test:e2e
 npm run test:e2e:opera
