@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Human Rate Typer",
   "description": "Clean pasted text and type it into web editors at a configurable human pace.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "minimum_chrome_version": "116",
   "permissions": ["sidePanel", "storage", "activeTab", "scripting", "debugger"],
   "host_permissions": ["https://docs.google.com/*"],

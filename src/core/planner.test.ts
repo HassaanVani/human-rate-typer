@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createTypingPlan, replayPlan, rescaleRemainingPlan } from './planner';
+import { createTypingPlan, ENTER_SETTLE_MS, replayPlan, rescaleRemainingPlan } from './planner';
 import { DEFAULT_PROFILE, type TypingProfile, type TypoKind } from './types';
 
 function profile(overrides: Partial<TypingProfile> = {}): TypingProfile {
@@ -65,8 +65,28 @@ describe('createTypingPlan', () => {
   it('gives punctuation and paragraphs longer relative pauses', () => {
     const plan = createTypingPlan('a.b\nc', profile({ typoRate: 0, randomness: 0, pauseStrength: 100 }), 1);
     const delays = plan.steps.map((step) => step.delayMs);
-    expect(delays[1]).toBeGreaterThan(delays[0]);
-    expect(delays[3]).toBeGreaterThan(delays[0]);
+    expect(delays[2]).toBeGreaterThan(delays[0]);
+    expect(delays[4]).toBeGreaterThanOrEqual(ENTER_SETTLE_MS);
+  });
+
+  it('preserves repeated and trailing newlines exactly', () => {
+    const source = 'First paragraph.\nSecond paragraph.\n\nFourth paragraph.\n';
+    const plan = createTypingPlan(source, profile({ targetWpm: 200, typoRate: 5 }), 1903);
+    expect(replayPlan(plan)).toBe(source);
+  });
+
+  it('always leaves a settle interval after Enter, including after live speed changes', () => {
+    const plan = createTypingPlan('one\ntwo\n\nthree', profile({ targetWpm: 200, typoRate: 0, pauseStrength: 0 }), 9);
+    const assertEnterSettles = () => {
+      plan.steps.forEach((step, index) => {
+        if (step.action.type === 'enter' && plan.steps[index + 1]) {
+          expect(plan.steps[index + 1]!.delayMs).toBeGreaterThanOrEqual(ENTER_SETTLE_MS);
+        }
+      });
+    };
+    assertEnterSettles();
+    rescaleRemainingPlan(plan, 0, 10, 200);
+    assertEnterSettles();
   });
 
   it('counts joined emoji as one source grapheme and replays it exactly', () => {

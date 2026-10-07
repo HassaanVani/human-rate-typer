@@ -226,7 +226,9 @@ async function dispatchKey(action: InputAction): Promise<void> {
     const code = action.type === 'backspace' ? 'Backspace' : 'Enter';
     const virtualKeyCode = action.type === 'backspace' ? 8 : 13;
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
-      type: 'keyDown', key, code, windowsVirtualKeyCode: virtualKeyCode, nativeVirtualKeyCode: virtualKeyCode,
+      // Enter and Backspace do not produce printable text. rawKeyDown matches
+      // Chrome's native keyboard path and is more reliable in rich editors.
+      type: 'rawKeyDown', key, code, windowsVirtualKeyCode: virtualKeyCode, nativeVirtualKeyCode: virtualKeyCode,
     });
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
       type: 'keyUp', key, code, windowsVirtualKeyCode: virtualKeyCode, nativeVirtualKeyCode: virtualKeyCode,

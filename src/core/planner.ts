@@ -9,6 +9,8 @@ const ADJACENT: Record<string, string> = {
   v: 'cfgb', w: 'qase', x: 'zsdc', y: 'tghu', z: 'asx',
 };
 
+export const ENTER_SETTLE_MS = 90;
+
 function insertion(text: string, behavior: TypingStep['behavior'], sourceAdvance = 0): TypingStep {
   return {
     action: text === '\n' ? { type: 'enter' } : { type: 'insert', text },
@@ -92,7 +94,8 @@ function appendTypo(
   return 1;
 }
 
-function punctuationWeight(step: TypingStep, strength: number): number {
+function punctuationWeight(step: TypingStep | undefined, strength: number): number {
+  if (!step) return 0;
   if (step.action.type === 'enter') return 4.5 * strength;
   if (step.action.type !== 'insert') return 0;
   if (/[.!?]/.test(step.action.text)) return 3.1 * strength;
@@ -120,16 +123,29 @@ export function createTypingPlan(source: string, profile: TypingProfile, seed: n
   const targetMs = graphemes.length === 0 ? 0 : (graphemes.length * 12_000) / profile.targetWpm;
   const variability = profile.randomness / 100;
   const pauseStrength = profile.pauseStrength / 100;
-  const rawWeights = steps.map((step) => {
+  const rawWeights = steps.map((step, stepIndex) => {
     const jitter = Math.exp((random.next() - 0.5) * variability * 1.8);
     const correction = step.behavior === 'correction' ? profile.correctionDelayMs / 100 : 0;
     const thinking = random.next() < 0.008 * pauseStrength ? random.between(3, 10) * pauseStrength : 0;
-    return Math.max(0.1, jitter + punctuationWeight(step, pauseStrength) + correction + thinking);
+    // A step's delay is waited before that step is dispatched. Applying the
+    // punctuation weight to the following step creates the expected pause
+    // after punctuation and gives rich editors time to commit an Enter.
+    return Math.max(
+      0.1,
+      jitter + punctuationWeight(steps[stepIndex - 1], pauseStrength) + correction + thinking,
+    );
   });
   const weightTotal = rawWeights.reduce((sum, value) => sum + value, 0) || 1;
   const minimumDelay = profile.targetWpm >= 180 ? 6 : 10;
+  const minimums = steps.map((_, stepIndex) => (
+    steps[stepIndex - 1]?.action.type === 'enter'
+      ? Math.max(minimumDelay, ENTER_SETTLE_MS)
+      : minimumDelay
+  ));
+  const minimumTotal = minimums.reduce((sum, value) => sum + value, 0);
+  const distributableMs = Math.max(0, targetMs - minimumTotal);
   steps.forEach((step, stepIndex) => {
-    step.delayMs = Math.max(minimumDelay, (rawWeights[stepIndex]! / weightTotal) * targetMs);
+    step.delayMs = minimums[stepIndex]! + (rawWeights[stepIndex]! / weightTotal) * distributableMs;
   });
 
   return {
@@ -160,6 +176,9 @@ export function rescaleRemainingPlan(
   const ratio = previousWpm / nextWpm;
   for (let index = Math.max(0, fromStep); index < plan.steps.length; index += 1) {
     plan.steps[index]!.delayMs *= ratio;
+    if (plan.steps[index - 1]?.action.type === 'enter') {
+      plan.steps[index]!.delayMs = Math.max(ENTER_SETTLE_MS, plan.steps[index]!.delayMs);
+    }
   }
   plan.estimatedMs = plan.steps.reduce((sum, step) => sum + step.delayMs, 0);
   return ratio;
