@@ -225,10 +225,12 @@ async function dispatchKey(action: InputAction): Promise<void> {
     const key = action.type === 'backspace' ? 'Backspace' : 'Enter';
     const code = action.type === 'backspace' ? 'Backspace' : 'Enter';
     const virtualKeyCode = action.type === 'backspace' ? 8 : 13;
+    const text = action.type === 'enter' ? '\r' : undefined;
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
-      // Enter and Backspace do not produce printable text. rawKeyDown matches
-      // Chrome's native keyboard path and is more reliable in rich editors.
-      type: 'rawKeyDown', key, code, windowsVirtualKeyCode: virtualKeyCode, nativeVirtualKeyCode: virtualKeyCode,
+      // keyDown is required for Chromium to apply Enter's default editing
+      // behavior in contenteditable and rich-editor surfaces.
+      type: text ? 'keyDown' : 'rawKeyDown', key, code, text, unmodifiedText: text,
+      windowsVirtualKeyCode: virtualKeyCode, nativeVirtualKeyCode: virtualKeyCode,
     });
     await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
       type: 'keyUp', key, code, windowsVirtualKeyCode: virtualKeyCode, nativeVirtualKeyCode: virtualKeyCode,

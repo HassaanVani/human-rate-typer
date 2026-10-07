@@ -22,17 +22,39 @@ describe('cleanText', () => {
     expect(result.removals).toHaveLength(8);
   });
 
-  it('normalizes all supported line endings without trimming', () => {
-    const result = cleanText('  a\r\nb\rc\u2028d\u2029e  ');
-    expect(result.cleaned).toBe('  a\nb\nc\nd\ne  ');
-    expect(result.normalizedLineEndings).toBe(4);
+  it('normalizes Unicode and legacy line endings without trimming', () => {
+    const result = cleanText('  a\r\nb\rc\vd\fe\u0085f\u2028g\u2029h  ');
+    expect(result.cleaned).toBe('  a\nb\nc\nd\ne\nf\ng\nh  ');
+    expect(result.normalizedLineEndings).toBe(7);
   });
 
-  it('preserves multilingual text, emoji joins, variation selectors, tabs, and typography', () => {
-    const source = 'العربية\u200C हिन्दी 👩‍💻 ❤️\t“café”—日本語';
+  it('normalizes every supported Unicode space to an ASCII space', () => {
+    const spaces = [
+      0x00a0, 0x1680, 0x180e, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004,
+      0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x202f, 0x205f, 0x3000,
+    ].map((codePoint) => String.fromCodePoint(codePoint)).join('');
+    const result = cleanText(`a${spaces}b`);
+    expect(result.cleaned).toBe(`a${' '.repeat(17)}b`);
+    expect(result.normalizations).toHaveLength(17);
+    expect(result.normalizations.every((item) => item.replacement === ' ')).toBe(true);
+  });
+
+  it('normalizes compatibility quotes, apostrophes, and dashes to ASCII', () => {
+    const result = cleanText('“quoted” ‘word’ ʼprime′ ″double″ – — ‑ －');
+    expect(result.cleaned).toBe('"quoted" \'word\' \'prime\' "double" - - - -');
+    expect(result.normalizations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ codePoint: 'U+201C', replacement: '"' }),
+      expect.objectContaining({ codePoint: 'U+2019', replacement: "'" }),
+      expect.objectContaining({ codePoint: 'U+2013', replacement: '-' }),
+    ]));
+  });
+
+  it('preserves multilingual text, emoji joins, variation selectors, and tabs', () => {
+    const source = 'العربية\u200C हिन्दी 👩‍💻 ❤️\t日本語';
     const result = cleanText(source);
     expect(result.cleaned).toBe(source);
     expect(result.removals).toEqual([]);
+    expect(result.normalizations).toEqual([]);
   });
 
   it('formats supplementary code points', () => {

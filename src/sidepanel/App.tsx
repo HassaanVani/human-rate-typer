@@ -439,16 +439,22 @@ export function App() {
         <div className="text-meta">
           <span>{cleanup.cleaned.length.toLocaleString()} characters</span>
           <span>≈ {duration(previewPlan.estimatedMs)}</span>
-          <span className={cleanup.removals.length ? 'cleaning-found' : 'cleaning-clear'}>
-            {cleanup.removals.reduce((sum, item) => sum + item.count, 0)} hidden removed
+          <span className={cleanup.removals.length || cleanup.normalizations.length ? 'cleaning-found' : 'cleaning-clear'}>
+            {cleanup.removals.reduce((sum, item) => sum + item.count, 0)} hidden removed ·{' '}
+            {cleanup.normalizations.reduce((sum, item) => sum + item.count, 0) + cleanup.normalizedLineEndings} normalized
           </span>
         </div>
 
-        {(cleanup.removals.length > 0 || cleanup.normalizedLineEndings > 0) && (
+        {(cleanup.removals.length > 0 || cleanup.normalizations.length > 0 || cleanup.normalizedLineEndings > 0) && (
           <details className="cleanup-report">
             <summary>Cleanup report</summary>
             <div>
               {cleanup.normalizedLineEndings > 0 && <p>Normalized {cleanup.normalizedLineEndings} line ending(s).</p>}
+              {cleanup.normalizations.map((item) => (
+                <p key={`normalized-${item.codePoint}`}>
+                  {item.codePoint} {item.name}: {item.count} → {item.replacement === ' ' ? 'regular space' : item.replacement}
+                </p>
+              ))}
               {cleanup.removals.map((item) => (
                 <p key={item.codePoint}><code>{item.codePoint}</code> {item.name} <strong>×{item.count}</strong></p>
               ))}

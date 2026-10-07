@@ -43,7 +43,7 @@ Chrome shortcuts can be changed at `chrome://extensions/shortcuts`.
 
 ## Cleanup policy
 
-Safe cleanup normalizes line endings and removes selected invisible Unicode formatting controls: zero-width spaces, BOMs, soft hyphens, word joiners, bidi embedding/isolate controls, interlinear controls, shorthand/music controls, and Unicode tag characters. It preserves visible Unicode, normal whitespace, emoji variation selectors, ZWJ/ZWNJ sequences, punctuation, and typography.
+Safe cleanup converts Unicode and legacy line separators to `\n`; converts Unicode space characters to a regular ASCII space; and converts compatibility quotes, apostrophes, and dash characters to `"`, `'`, and `-`. It also removes selected invisible Unicode formatting controls: zero-width spaces, BOMs, soft hyphens, word joiners, bidi embedding/isolate controls, interlinear controls, shorthand/music controls, and Unicode tag characters. Multilingual text, tabs, emoji variation selectors, and ZWJ/ZWNJ sequences remain intact. Every conversion and removal appears in the cleanup report.
 
 This is not a universal “AI watermark” detector. Semantic watermarking, unusual word choice, and visible confusable characters are intentionally not changed.
 

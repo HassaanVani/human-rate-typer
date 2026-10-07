@@ -28,10 +28,15 @@ export interface CleanupRemoval {
   indices: number[];
 }
 
+export interface CleanupNormalization extends CleanupRemoval {
+  replacement: string;
+}
+
 export interface CleanupResult {
   original: string;
   cleaned: string;
   removals: CleanupRemoval[];
+  normalizations: CleanupNormalization[];
   normalizedLineEndings: number;
 }
 

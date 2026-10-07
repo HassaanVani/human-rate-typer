@@ -37,3 +37,53 @@ test('loads the extension and exposes editor fixtures', async () => {
   await expect(fixture.locator('#rich')).toHaveAttribute('role', 'textbox');
   await expect(fixture.locator('#editor-frame')).toBeVisible();
 });
+
+test('debugger Enter input preserves consecutive paragraphs in a rich editor', async () => {
+  let [worker] = context.serviceWorkers();
+  if (!worker) worker = await context.waitForEvent('serviceworker');
+
+  const fixture = await context.newPage();
+  await fixture.goto('http://127.0.0.1:5173/tests/fixtures/editors.html');
+  const richEditor = fixture.locator('#rich');
+  await richEditor.evaluate((element) => {
+    element.setAttribute('data-enter-count', '0');
+    element.addEventListener('keydown', (event) => {
+      if ((event as KeyboardEvent).key !== 'Enter') return;
+      const count = Number(element.getAttribute('data-enter-count') ?? 0);
+      element.setAttribute('data-enter-count', String(count + 1));
+    });
+  });
+  await richEditor.focus();
+
+  const source = 'First paragraph.\nSecond paragraph.\n\nFourth paragraph.';
+  await worker.evaluate(async ({ text, settleMs }) => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) throw new Error('Could not find the rich-editor fixture tab.');
+    const debuggee = { tabId: tab.id };
+    await chrome.debugger.attach(debuggee, '1.3');
+    try {
+      for (const character of text) {
+        if (character === '\n') {
+          await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
+            type: 'keyDown', key: 'Enter', code: 'Enter',
+            text: '\r', unmodifiedText: '\r',
+            windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+          });
+          await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
+            type: 'keyUp', key: 'Enter', code: 'Enter',
+            windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13,
+          });
+          await new Promise((resolve) => setTimeout(resolve, settleMs));
+        } else {
+          await chrome.debugger.sendCommand(debuggee, 'Input.insertText', { text: character });
+        }
+      }
+    } finally {
+      await chrome.debugger.detach(debuggee);
+    }
+  }, { text: source, settleMs: 90 });
+
+  expect(await richEditor.getAttribute('data-enter-count')).toBe('3');
+  expect(await richEditor.evaluate((element) => (element as HTMLElement).innerText))
+    .toMatch(/^First paragraph\.\nSecond paragraph\.\n{2,3}Fourth paragraph\.$/);
+});
