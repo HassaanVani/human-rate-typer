@@ -162,7 +162,7 @@ export function replayPlan(plan: TypingPlan): string {
   for (const step of plan.steps) {
     if (step.action.type === 'backspace') buffer.pop();
     else if (step.action.type === 'enter') buffer.push('\n');
-    else buffer.push(step.action.text);
+    else if (step.action.type === 'insert') buffer.push(step.action.text);
   }
   return buffer.join('');
 }
@@ -175,6 +175,7 @@ export function rescaleRemainingPlan(
 ): number {
   const ratio = previousWpm / nextWpm;
   for (let index = Math.max(0, fromStep); index < plan.steps.length; index += 1) {
+    if (plan.steps[index]!.lockedDelay) continue;
     plan.steps[index]!.delayMs *= ratio;
     if (plan.steps[index - 1]?.action.type === 'enter') {
       plan.steps[index]!.delayMs = Math.max(ENTER_SETTLE_MS, plan.steps[index]!.delayMs);

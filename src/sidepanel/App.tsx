@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cleanText } from '../core/cleanup';
 import { createTypingPlan, rescaleRemainingPlan } from '../core/planner';
 import { createSeed } from '../core/random';
+import { alignParagraphs, createRevisionPlan } from '../core/revision';
 import {
   DEFAULT_PROFILE,
+  DEFAULT_REVISION_PROFILE,
   type BackgroundToPanelMessage,
   type PanelToBackgroundMessage,
   type SessionStatus,
   type StartMode,
+  type RevisionProfile,
   type TypingPlan,
   type TypingProfile,
   type TypoKind,
@@ -40,10 +43,12 @@ function statusText(status: SessionStatus): string {
 
 export function App() {
   const [text, setText] = useState('');
+  const [draftText, setDraftText] = useState('');
   const [profile, setProfile] = useState<TypingProfile>(DEFAULT_PROFILE);
+  const [revisionProfile, setRevisionProfile] = useState<RevisionProfile>(DEFAULT_REVISION_PROFILE);
   const [status, setStatus] = useState<SessionStatus>('idle');
   const [error, setError] = useState('');
-  const [activeView, setActiveView] = useState<'input' | 'preview'>('input');
+  const [activeView, setActiveView] = useState<'input' | 'draft' | 'final' | 'preview'>('input');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [completed, setCompleted] = useState(0);
@@ -70,9 +75,20 @@ export function App() {
   const elapsedBeforeRunRef = useRef(0);
   const backgroundOwnedRef = useRef(false);
   const profileRef = useRef(profile);
+  const revisionProfileRef = useRef(revisionProfile);
   const activeWpmRef = useRef(profile.targetWpm);
   profileRef.current = profile;
+  revisionProfileRef.current = revisionProfile;
   const cleanup = useMemo(() => cleanText(text), [text]);
+  const draftCleanup = useMemo(() => cleanText(draftText), [draftText]);
+  const alignment = useMemo(() => {
+    if (!revisionProfile.enabled || !draftCleanup.cleaned || !cleanup.cleaned) return { rows: [], error: '' };
+    try {
+      return { rows: alignParagraphs(draftCleanup.cleaned, cleanup.cleaned, revisionProfile), error: '' };
+    } catch (alignmentError) {
+      return { rows: [], error: alignmentError instanceof Error ? alignmentError.message : String(alignmentError) };
+    }
+  }, [cleanup.cleaned, draftCleanup.cleaned, revisionProfile]);
   const handlersRef = useRef<{
     begin: (mode?: StartMode) => void;
     beginCountdown: () => void;
@@ -146,7 +162,10 @@ export function App() {
 
   const startPlan = useCallback(() => {
     const currentProfile = profileRef.current;
-    const plan = createTypingPlan(cleanup.cleaned, currentProfile, createSeed());
+    const currentRevision = revisionProfileRef.current;
+    const plan = currentRevision.enabled
+      ? createRevisionPlan(draftCleanup.cleaned, cleanup.cleaned, currentProfile, currentRevision, createSeed())
+      : createTypingPlan(cleanup.cleaned, currentProfile, createSeed());
     planRef.current = plan;
     activeWpmRef.current = currentProfile.targetWpm;
     stepIndexRef.current = 0;
@@ -159,7 +178,7 @@ export function App() {
     setElapsedMs(0);
     setSessionStatus('running');
     scheduleNextRef.current();
-  }, [cleanup.cleaned, setSessionStatus]);
+  }, [cleanup.cleaned, draftCleanup.cleaned, setSessionStatus]);
 
   const beginCountdown = useCallback(() => {
     let remaining = Math.max(0, Math.round(profileRef.current.countdownSeconds));
@@ -212,6 +231,16 @@ export function App() {
       setSessionStatus('error');
       return;
     }
+    if (revisionProfile.enabled && !draftCleanup.cleaned) {
+      setError('Add a draft version before starting Revision Mode.');
+      setSessionStatus('error');
+      return;
+    }
+    if (revisionProfile.enabled && alignment.error) {
+      setError(alignment.error);
+      setSessionStatus('error');
+      return;
+    }
     if (['running', 'paused', 'countdown', 'arming'].includes(statusRef.current)) stop();
     setError('');
     setTargetLabel('');
@@ -220,14 +249,21 @@ export function App() {
       backgroundOwnedRef.current = true;
       setBackgroundOwned(true);
       setSessionStatus('arming');
-      post({ type: 'ARM_TARGET', source: cleanup.cleaned, profile, seed: createSeed() });
+      post({
+        type: 'ARM_TARGET',
+        source: cleanup.cleaned,
+        profile,
+        seed: createSeed(),
+        draftSource: revisionProfile.enabled ? draftCleanup.cleaned : undefined,
+        revisionProfile: revisionProfile.enabled ? revisionProfile : undefined,
+      });
     } else {
       backgroundOwnedRef.current = false;
       setBackgroundOwned(false);
       setSessionStatus('countdown');
       post({ type: 'PREPARE_SESSION', mode: 'focused' });
     }
-  }, [cleanup.cleaned, post, profile.startMode, setSessionStatus, stop]);
+  }, [alignment.error, cleanup.cleaned, draftCleanup.cleaned, post, profile, revisionProfile, setSessionStatus, stop]);
 
   handlersRef.current = { begin, beginCountdown, pause, resume, stop };
 
@@ -290,15 +326,23 @@ export function App() {
 
   useEffect(() => {
     void Promise.all([
-      chrome.storage.session.get(['draftText', 'pendingCommand']),
-      chrome.storage.local.get(['profile']),
+      chrome.storage.session.get(['draftText', 'sourceText', 'revisionDraftText', 'pendingCommand']),
+      chrome.storage.local.get(['profile', 'revisionProfile']),
     ]).then(([sessionData, localData]) => {
-      if (typeof sessionData.draftText === 'string') setText(sessionData.draftText);
+      if (typeof sessionData.sourceText === 'string') setText(sessionData.sourceText);
+      else if (typeof sessionData.draftText === 'string') setText(sessionData.draftText);
+      if (typeof sessionData.revisionDraftText === 'string') setDraftText(sessionData.revisionDraftText);
       if (localData.profile) {
         const storedProfile = { ...DEFAULT_PROFILE, ...localData.profile };
         setProfile(storedProfile);
         profileRef.current = storedProfile;
         activeWpmRef.current = storedProfile.targetWpm;
+      }
+      if (localData.revisionProfile) {
+        const storedRevision = { ...DEFAULT_REVISION_PROFILE, ...localData.revisionProfile };
+        setRevisionProfile(storedRevision);
+        revisionProfileRef.current = storedRevision;
+        setActiveView(storedRevision.enabled ? 'draft' : 'input');
       }
       if (typeof sessionData.pendingCommand === 'string') setPendingCommand(sessionData.pendingCommand);
       void chrome.storage.session.remove('pendingCommand');
@@ -308,15 +352,18 @@ export function App() {
 
   useEffect(() => {
     if (!loaded) return;
-    const handle = setTimeout(() => void chrome.storage.session.set({ draftText: text }), 250);
+    const handle = setTimeout(() => void chrome.storage.session.set({
+      sourceText: text,
+      revisionDraftText: draftText,
+    }), 250);
     return () => clearTimeout(handle);
-  }, [loaded, text]);
+  }, [draftText, loaded, text]);
 
   useEffect(() => {
     if (!loaded) return;
-    const handle = setTimeout(() => void chrome.storage.local.set({ profile }), 250);
+    const handle = setTimeout(() => void chrome.storage.local.set({ profile, revisionProfile }), 250);
     return () => clearTimeout(handle);
-  }, [loaded, profile]);
+  }, [loaded, profile, revisionProfile]);
 
   useEffect(() => {
     if (!loaded || !pendingCommand) return;
@@ -351,8 +398,13 @@ export function App() {
   }, [completed, status]);
 
   const previewPlan = useMemo(
-    () => createTypingPlan(cleanup.cleaned, profile, 0x485254),
-    [cleanup.cleaned, profile],
+    () => {
+      if (!revisionProfile.enabled || alignment.error || !draftCleanup.cleaned) {
+        return createTypingPlan(cleanup.cleaned, profile, 0x485254);
+      }
+      return createRevisionPlan(draftCleanup.cleaned, cleanup.cleaned, profile, revisionProfile, 0x485254);
+    },
+    [alignment.error, cleanup.cleaned, draftCleanup.cleaned, profile, revisionProfile],
   );
   const total = backgroundOwned ? backgroundTotal : (planRef.current?.graphemeCount ?? previewPlan.graphemeCount);
   const progress = total ? Math.min(100, (completed / total) * 100) : 0;
@@ -364,6 +416,10 @@ export function App() {
 
   const updateProfile = <K extends keyof TypingProfile>(key: K, value: TypingProfile[K]) => {
     setProfile((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateRevisionProfile = <K extends keyof RevisionProfile>(key: K, value: RevisionProfile[K]) => {
+    setRevisionProfile((current) => ({ ...current, [key]: value }));
   };
 
   const updateTargetWpm = (targetWpm: number) => {
@@ -412,23 +468,49 @@ export function App() {
       </header>
 
       <section className="card composer-card">
+        <div className="workflow-switch" role="group" aria-label="Typing workflow">
+          <button className={!revisionProfile.enabled ? 'active' : ''} disabled={busy} onClick={() => {
+            updateRevisionProfile('enabled', false);
+            setActiveView('input');
+          }}>Standard</button>
+          <button className={revisionProfile.enabled ? 'active' : ''} disabled={busy} onClick={() => {
+            updateRevisionProfile('enabled', true);
+            setActiveView('draft');
+          }}>Revision mode</button>
+        </div>
         <div className="section-heading">
           <div>
             <span className="eyebrow">01 · TEXT</span>
             <h2>What should be typed?</h2>
           </div>
           <div className="tab-switcher" role="tablist">
-            <button className={activeView === 'input' ? 'active' : ''} onClick={() => setActiveView('input')}>Input</button>
+            {revisionProfile.enabled ? (
+              <>
+                <button className={activeView === 'draft' ? 'active' : ''} onClick={() => setActiveView('draft')}>Draft</button>
+                <button className={activeView === 'final' ? 'active' : ''} onClick={() => setActiveView('final')}>Final</button>
+              </>
+            ) : (
+              <button className={activeView === 'input' ? 'active' : ''} onClick={() => setActiveView('input')}>Input</button>
+            )}
             <button className={activeView === 'preview' ? 'active' : ''} onClick={() => setActiveView('preview')}>Clean preview</button>
           </div>
         </div>
 
-        {activeView === 'input' ? (
+        {activeView === 'draft' ? (
+          <textarea
+            className="text-editor"
+            value={draftText}
+            onChange={(event) => setDraftText(event.target.value)}
+            placeholder="Paste the initial draft. Use one newline between paired paragraphs…"
+            spellCheck={false}
+            disabled={busy}
+          />
+        ) : activeView === 'input' || activeView === 'final' ? (
           <textarea
             className="text-editor"
             value={text}
             onChange={(event) => setText(event.target.value)}
-            placeholder="Paste or type a large amount of text here…"
+            placeholder={revisionProfile.enabled ? 'Paste the final desired version…' : 'Paste or type a large amount of text here…'}
             spellCheck={false}
             disabled={busy}
           />
@@ -437,7 +519,8 @@ export function App() {
         )}
 
         <div className="text-meta">
-          <span>{cleanup.cleaned.length.toLocaleString()} characters</span>
+          <span>{cleanup.cleaned.length.toLocaleString()} final characters</span>
+          {revisionProfile.enabled && <span>{alignment.rows.length || '—'} paired paragraphs</span>}
           <span>≈ {duration(previewPlan.estimatedMs)}</span>
           <span className={cleanup.removals.length || cleanup.normalizations.length ? 'cleaning-found' : 'cleaning-clear'}>
             {cleanup.removals.reduce((sum, item) => sum + item.count, 0)} hidden removed ·{' '}
@@ -463,9 +546,79 @@ export function App() {
         )}
       </section>
 
+      {revisionProfile.enabled && (
+        <section className="card revision-card">
+          <div className="section-heading">
+            <div><span className="eyebrow">02 · REVISION</span><h2>Paragraph playback</h2></div>
+            <span className="revision-badge">{alignment.rows.length} pairs</span>
+          </div>
+          {alignment.error && <p className="inline-warning">{alignment.error}</p>}
+          <div className="two-column-controls revision-controls">
+            <label className="slider-row compact">
+              <span>Draft hopping <b>{revisionProfile.draftHopping}%</b></span>
+              <input type="range" min="0" max="100" value={revisionProfile.draftHopping} disabled={busy}
+                onChange={(event) => updateRevisionProfile('draftHopping', Number(event.target.value))} />
+            </label>
+            <label className="slider-row compact">
+              <span>Revision hopping <b>{revisionProfile.revisionHopping}%</b></span>
+              <input type="range" min="0" max="100" value={revisionProfile.revisionHopping} disabled={busy}
+                onChange={(event) => updateRevisionProfile('revisionHopping', Number(event.target.value))} />
+            </label>
+            <label className="slider-row compact">
+              <span>Minimum reflection <b>{Math.round(revisionProfile.paragraphPauseMinMs / 1000)}s</b></span>
+              <input type="range" min="0" max="60" value={revisionProfile.paragraphPauseMinMs / 1000} disabled={busy}
+                onChange={(event) => {
+                  const value = Number(event.target.value) * 1000;
+                  setRevisionProfile((current) => ({
+                    ...current,
+                    paragraphPauseMinMs: value,
+                    paragraphPauseMaxMs: Math.max(current.paragraphPauseMaxMs, value),
+                  }));
+                }} />
+            </label>
+            <label className="slider-row compact">
+              <span>Maximum reflection <b>{Math.round(revisionProfile.paragraphPauseMaxMs / 1000)}s</b></span>
+              <input type="range" min="1" max="180" value={revisionProfile.paragraphPauseMaxMs / 1000} disabled={busy}
+                onChange={(event) => {
+                  const value = Number(event.target.value) * 1000;
+                  setRevisionProfile((current) => ({
+                    ...current,
+                    paragraphPauseMinMs: Math.min(current.paragraphPauseMinMs, value),
+                    paragraphPauseMaxMs: value,
+                  }));
+                }} />
+            </label>
+          </div>
+          <label className="countdown-control revision-select">
+            <span>Revision granularity</span>
+            <select value={revisionProfile.granularity} disabled={busy}
+              onChange={(event) => updateRevisionProfile('granularity', event.target.value as RevisionProfile['granularity'])}>
+              <option value="auto">Automatic by similarity</option>
+              <option value="word">Word by word</option>
+              <option value="sentence">Sentence by sentence</option>
+              <option value="paragraph">Whole paragraph</option>
+            </select>
+          </label>
+          {alignment.rows.length > 0 && (
+            <details className="alignment-preview">
+              <summary>Paragraph alignment and strategies</summary>
+              {alignment.rows.map((row) => (
+                <p key={row.index}>
+                  <strong>¶{row.index + 1}</strong>
+                  <span>{Math.round(row.similarity * 100)}% similar</span>
+                  <em>{row.granularity}</em>
+                </p>
+              ))}
+            </details>
+          )}
+          <p className="revision-note">Revision playback replaces plain-text document state to recover safely after every hop. Formatting inside the target editor is not preserved.</p>
+          <p className="revision-note">Temporary typo behaviors apply to Standard Mode; Revision Mode uses its draft and final passages as written.</p>
+        </section>
+      )}
+
       <section className="card">
         <div className="section-heading">
-          <div><span className="eyebrow">02 · RHYTHM</span><h2>Set the pace</h2></div>
+          <div><span className="eyebrow">{revisionProfile.enabled ? '03' : '02'} · RHYTHM</span><h2>Set the pace</h2></div>
           <output className="wpm-output">{profile.targetWpm}<small> WPM</small></output>
         </div>
 
@@ -492,7 +645,7 @@ export function App() {
 
       <section className="card">
         <button className="advanced-toggle" onClick={() => setShowAdvanced((value) => !value)} aria-expanded={showAdvanced}>
-          <span><span className="eyebrow">03 · BEHAVIOR</span><strong>Mistakes & corrections</strong></span>
+          <span><span className="eyebrow">{revisionProfile.enabled ? '04' : '03'} · BEHAVIOR</span><strong>Mistakes & corrections</strong></span>
           <span>{profile.typoRate.toFixed(1)} / 100 chars {showAdvanced ? '−' : '+'}</span>
         </button>
         {showAdvanced && (
@@ -521,7 +674,7 @@ export function App() {
 
       <section className="card launch-card">
         <div className="section-heading">
-          <div><span className="eyebrow">04 · DESTINATION</span><h2>Choose how to start</h2></div>
+          <div><span className="eyebrow">{revisionProfile.enabled ? '05' : '04'} · DESTINATION</span><h2>Choose how to start</h2></div>
         </div>
         <div className="mode-grid">
           {([
@@ -568,7 +721,8 @@ export function App() {
       {error && <div className="error-banner" role="alert"><span>!</span><p>{error}</p><button onClick={() => setError('')}>×</button></div>}
 
       {!busy && (
-        <button className="primary-button" onClick={() => begin()} disabled={!cleanup.cleaned}>
+        <button className="primary-button" onClick={() => begin()}
+          disabled={!cleanup.cleaned || (revisionProfile.enabled && (!draftCleanup.cleaned || Boolean(alignment.error)))}>
           <span className="play-icon">▶</span>
           {status === 'completed' || status === 'stopped' ? 'Start again' : 'Start typing'}
           <span className="button-hint">{duration(previewPlan.estimatedMs)}</span>

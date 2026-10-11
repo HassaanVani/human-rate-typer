@@ -2,10 +2,12 @@ import type {
   BackgroundToPanelMessage,
   InputAction,
   PanelToBackgroundMessage,
+  RevisionProfile,
   TypingPlan,
   TypingProfile,
 } from '../core/types';
 import { createTypingPlan, rescaleRemainingPlan } from '../core/planner';
+import { createRevisionPlan } from '../core/revision';
 import { keyboardEventForAscii } from '../core/keymap';
 
 let panelPort: chrome.runtime.Port | null = null;
@@ -15,6 +17,7 @@ let controlTargetTabId: number | null = null;
 let controlWindowId: number | null = null;
 let messageChain: Promise<void> = Promise.resolve();
 let intentionalDetach = false;
+let revisionDocument: string[] | null = null;
 
 interface AutomatedSession {
   plan: TypingPlan;
@@ -29,6 +32,8 @@ interface AutomatedSession {
   elapsedMs: number;
   runningSince: number | null;
   error?: string;
+  draftSource?: string;
+  revisionProfile?: RevisionProfile;
 }
 
 let automatedSession: AutomatedSession | null = null;
@@ -215,12 +220,53 @@ async function detach(): Promise<void> {
     // The target may already be gone.
   } finally {
     intentionalDetach = false;
+    revisionDocument = null;
   }
+}
+
+async function replaceDocument(debuggee: chrome.debugger.Debuggee, text: string): Promise<void> {
+  const isMac = /Mac/i.test(navigator.platform || navigator.userAgent);
+  const modifiers = isMac ? 4 : 2;
+  await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
+    type: 'rawKeyDown', key: isMac ? 'Meta' : 'Control',
+    code: isMac ? 'MetaLeft' : 'ControlLeft', modifiers,
+    windowsVirtualKeyCode: isMac ? 91 : 17,
+  });
+  await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
+    type: 'rawKeyDown', key: 'a', code: 'KeyA', modifiers,
+    commands: ['selectAll'],
+    windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65,
+  });
+  await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
+    type: 'keyUp', key: 'a', code: 'KeyA', modifiers,
+    windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65,
+  });
+  await chrome.debugger.sendCommand(debuggee, 'Input.dispatchKeyEvent', {
+    type: 'keyUp', key: isMac ? 'Meta' : 'Control',
+    code: isMac ? 'MetaLeft' : 'ControlLeft', modifiers: 0,
+    windowsVirtualKeyCode: isMac ? 91 : 17,
+  });
+  await chrome.debugger.sendCommand(debuggee, 'Input.insertText', { text });
 }
 
 async function dispatchKey(action: InputAction): Promise<void> {
   if (attachedTabId === null) throw new Error('The typing session is not attached to a tab.');
   const debuggee = targetFor(attachedTabId);
+  if (action.type === 'wait') return;
+  if (action.type === 'revision-reset') {
+    revisionDocument = Array.from({ length: action.paragraphCount }, () => '');
+    await replaceDocument(debuggee, revisionDocument.join('\n'));
+    return;
+  }
+  if (action.type === 'revision-patch') {
+    if (!revisionDocument) throw new Error('Revision playback lost its document state. Restart the session.');
+    if (action.paragraphIndex < 0 || action.paragraphIndex >= revisionDocument.length) {
+      throw new Error('Revision playback received an invalid paragraph target.');
+    }
+    revisionDocument[action.paragraphIndex] = action.text;
+    await replaceDocument(debuggee, revisionDocument.join('\n'));
+    return;
+  }
   if (action.type === 'backspace' || action.type === 'enter') {
     const key = action.type === 'backspace' ? 'Backspace' : 'Enter';
     const code = action.type === 'backspace' ? 'Backspace' : 'Enter';
@@ -393,6 +439,8 @@ function setAutomationWpm(targetWpm: number): void {
       source: session.plan.source,
       profile: session.profile,
       seed: session.plan.seed,
+      draftSource: session.draftSource,
+      revisionProfile: session.revisionProfile,
     },
   });
   emitAutomationState();
@@ -443,11 +491,19 @@ async function restorePendingAutomation(): Promise<void> {
   if (automatedSession) return;
   const stored = await chrome.storage.session.get('pendingClickSession');
   const pending = stored.pendingClickSession as
-    | { source: string; profile: TypingProfile; seed: number }
+    | {
+        source: string;
+        profile: TypingProfile;
+        seed: number;
+        draftSource?: string;
+        revisionProfile?: RevisionProfile;
+      }
     | undefined;
   if (!pending) return;
   automatedSession = {
-    plan: createTypingPlan(pending.source, pending.profile, pending.seed),
+    plan: pending.revisionProfile?.enabled && pending.draftSource !== undefined
+      ? createRevisionPlan(pending.draftSource, pending.source, pending.profile, pending.revisionProfile, pending.seed)
+      : createTypingPlan(pending.source, pending.profile, pending.seed),
     profile: pending.profile,
     status: 'arming',
     stepIndex: 0,
@@ -458,6 +514,8 @@ async function restorePendingAutomation(): Promise<void> {
     remainingDelay: null,
     elapsedMs: 0,
     runningSince: null,
+    draftSource: pending.draftSource,
+    revisionProfile: pending.revisionProfile,
   };
 }
 
@@ -465,10 +523,14 @@ async function beginAutomatedClickSession(
   source: string,
   profile: TypingProfile,
   seed: number,
+  draftSource?: string,
+  revisionProfile?: RevisionProfile,
 ): Promise<void> {
   if (automationIsActive()) await stopAutomation('stopped');
   automatedSession = {
-    plan: createTypingPlan(source, profile, seed),
+    plan: revisionProfile?.enabled && draftSource !== undefined
+      ? createRevisionPlan(draftSource, source, profile, revisionProfile, seed)
+      : createTypingPlan(source, profile, seed),
     profile,
     status: 'arming',
     stepIndex: 0,
@@ -479,8 +541,10 @@ async function beginAutomatedClickSession(
     remainingDelay: null,
     elapsedMs: 0,
     runningSince: null,
+    draftSource,
+    revisionProfile,
   };
-  await chrome.storage.session.set({ pendingClickSession: { source, profile, seed } });
+  await chrome.storage.session.set({ pendingClickSession: { source, profile, seed, draftSource, revisionProfile } });
   emitAutomationState();
   await armTarget();
 }
@@ -506,7 +570,13 @@ async function handlePanelMessage(message: PanelToBackgroundMessage): Promise<vo
       emitAutomationState();
       break;
     case 'ARM_TARGET':
-      await beginAutomatedClickSession(message.source, message.profile, message.seed);
+      await beginAutomatedClickSession(
+        message.source,
+        message.profile,
+        message.seed,
+        message.draftSource,
+        message.revisionProfile,
+      );
       break;
     case 'PREPARE_SESSION':
       await prepareSession(message.mode);

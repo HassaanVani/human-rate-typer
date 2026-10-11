@@ -1,5 +1,6 @@
 export type StartMode = 'click' | 'focused' | 'shortcut';
 export type TypoKind = 'substitution' | 'duplicate' | 'transposition' | 'omission' | 'word';
+export type RevisionGranularity = 'auto' | 'word' | 'sentence' | 'paragraph';
 export type SessionStatus =
   | 'idle'
   | 'arming'
@@ -19,6 +20,17 @@ export interface TypingProfile {
   correctionDelayMs: number;
   countdownSeconds: number;
   startMode: StartMode;
+}
+
+export interface RevisionProfile {
+  enabled: boolean;
+  draftHopping: number;
+  revisionHopping: number;
+  paragraphPauseMinMs: number;
+  paragraphPauseMaxMs: number;
+  granularity: RevisionGranularity;
+  wordSimilarityThreshold: number;
+  sentenceSimilarityThreshold: number;
 }
 
 export interface CleanupRemoval {
@@ -43,13 +55,17 @@ export interface CleanupResult {
 export type InputAction =
   | { type: 'insert'; text: string }
   | { type: 'backspace' }
-  | { type: 'enter' };
+  | { type: 'enter' }
+  | { type: 'revision-reset'; paragraphCount: number }
+  | { type: 'revision-patch'; paragraphIndex: number; text: string }
+  | { type: 'wait' };
 
 export interface TypingStep {
   action: InputAction;
   delayMs: number;
   sourceAdvance: number;
-  behavior: 'normal' | TypoKind | 'correction';
+  behavior: 'normal' | TypoKind | 'correction' | 'draft' | 'revision' | 'reflection';
+  lockedDelay?: boolean;
 }
 
 export interface TypingPlan {
@@ -58,6 +74,7 @@ export interface TypingPlan {
   graphemeCount: number;
   estimatedMs: number;
   steps: TypingStep[];
+  mode?: 'standard' | 'revision';
 }
 
 export interface TypingSession {
@@ -73,7 +90,14 @@ export interface TypingSession {
 
 export type PanelToBackgroundMessage =
   | { type: 'HELLO' }
-  | { type: 'ARM_TARGET'; source: string; profile: TypingProfile; seed: number }
+  | {
+      type: 'ARM_TARGET';
+      source: string;
+      profile: TypingProfile;
+      seed: number;
+      draftSource?: string;
+      revisionProfile?: RevisionProfile;
+    }
   | { type: 'PREPARE_SESSION'; mode: Exclude<StartMode, 'shortcut'> }
   | { type: 'DISPATCH_INPUT'; action: InputAction }
   | { type: 'SET_WPM'; targetWpm: number }
@@ -117,4 +141,15 @@ export const DEFAULT_PROFILE: TypingProfile = {
   correctionDelayMs: 380,
   countdownSeconds: 3,
   startMode: 'click',
+};
+
+export const DEFAULT_REVISION_PROFILE: RevisionProfile = {
+  enabled: false,
+  draftHopping: 45,
+  revisionHopping: 70,
+  paragraphPauseMinMs: 4_000,
+  paragraphPauseMaxMs: 12_000,
+  granularity: 'auto',
+  wordSimilarityThreshold: 0.82,
+  sentenceSimilarityThreshold: 0.55,
 };

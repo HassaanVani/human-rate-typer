@@ -28,6 +28,18 @@ Chrome will display a strong debugger permission warning. The extension uses tha
    - **Shortcut:** focus an editor and press `Command/Ctrl+Shift+Y`.
 4. Pause/resume with `Command/Ctrl+Shift+U` or stop immediately with `Command/Ctrl+Shift+X`.
 
+### Revision Mode
+
+Revision Mode accepts paired **Draft** and **Final** versions. Use one newline per paragraph in both versions; the paragraph counts must match. It then:
+
+- builds the draft a word at a time while optionally hopping among paragraph slots;
+- pauses for a configurable reflection interval when paragraphs are completed and revisited;
+- revisits paragraphs in a seeded nonlinear order;
+- chooses word, sentence, or whole-paragraph revision from the displayed similarity score, or follows a forced granularity setting; and
+- guarantees that the completed plain text exactly equals the cleaned Final version.
+
+Revision playback keeps a logical paragraph document and reapplies its current plain-text state after every hop. This makes recovery deterministic in complex editors, but existing target formatting is not preserved. Draft/final text and the generated plan remain local. Temporary typo behaviors are available in Standard Mode; Revision Mode uses the supplied passages as written.
+
 The WPM slider remains active during countdown, typing, and pause. Changing it immediately rescales the unfinished part of the session without restarting or altering the text.
 
 Chrome shortcuts can be changed at `chrome://extensions/shortcuts`.
